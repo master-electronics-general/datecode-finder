@@ -1,14 +1,21 @@
 """Databricks SQL access for the Datecode Finder.
 
-Connection is configured via environment variables (see .env.example):
-  DATABRICKS_SERVER_HOSTNAME  - workspace hostname, e.g. dbc-xxxx.cloud.databricks.com
-  DATABRICKS_HTTP_PATH        - SQL warehouse HTTP path, e.g. /sql/1.0/warehouses/xxxx
-  DATABRICKS_TOKEN            - optional personal access token; if unset, falls
-                                 back to the Databricks CLI's own cached OAuth
-                                 login (run `databricks auth login` once), so
-                                 each user authenticates as themselves without
-                                 a browser prompt on every run.
-  DATABRICKS_CONFIG_PROFILE  - CLI profile to use (default: DEFAULT)
+Auth resolves in this order:
+  1. Databricks Apps on-behalf-of-user token (X-Forwarded-Access-Token header)
+     — used automatically when deployed as a Databricks App with the "sql"
+     user_api_scope. Each viewer queries as themselves, no setup needed.
+  2. DATABRICKS_TOKEN env var — a fixed personal access token, for quick
+     local testing only.
+  3. The Databricks CLI's own cached OAuth login (run `databricks auth login`
+     once) — the default for local dev, so each developer authenticates as
+     themselves without a browser prompt on every run.
+
+Connection target comes from environment variables (see .env.example for
+local dev; app.yaml's sql_warehouse resource injects these automatically
+when running as a Databricks App):
+  DATABRICKS_SERVER_HOSTNAME / DATABRICKS_HOST  - workspace hostname
+  DATABRICKS_HTTP_PATH / DATABRICKS_WAREHOUSE_ID - SQL warehouse target
+  DATABRICKS_CONFIG_PROFILE                      - CLI profile (default: DEFAULT)
 """
 
 import os
@@ -22,11 +29,34 @@ load_dotenv()
 CATALOG = "me_prod"
 
 
-def _open_connection():
-    server_hostname = os.environ["DATABRICKS_SERVER_HOSTNAME"]
-    http_path = os.environ["DATABRICKS_HTTP_PATH"]
-    token = os.environ.get("DATABRICKS_TOKEN")
+def _server_hostname():
+    host = os.environ.get("DATABRICKS_SERVER_HOSTNAME") or os.environ["DATABRICKS_HOST"]
+    return host.removeprefix("https://").removeprefix("http://").rstrip("/")
 
+
+def _http_path():
+    http_path = os.environ.get("DATABRICKS_HTTP_PATH")
+    if http_path:
+        return http_path
+    return f"/sql/1.0/warehouses/{os.environ['DATABRICKS_WAREHOUSE_ID']}"
+
+
+def _user_token():
+    try:
+        return st.context.headers.get("X-Forwarded-Access-Token")
+    except Exception:
+        return None
+
+
+def _open_connection():
+    server_hostname = _server_hostname()
+    http_path = _http_path()
+
+    user_token = _user_token()
+    if user_token:
+        return sql.connect(server_hostname=server_hostname, http_path=http_path, access_token=user_token)
+
+    token = os.environ.get("DATABRICKS_TOKEN")
     if token:
         return sql.connect(server_hostname=server_hostname, http_path=http_path, access_token=token)
 
