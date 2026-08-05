@@ -1,7 +1,5 @@
-command: ["streamlit", "run", "app.py", "--server.port=8080", "--server.address=0.0.0.0"]
+command: ["streamlit", "run", "app.py", "--server.address", "0.0.0.0", "--server.port", "$DATABRICKS_APP_PORT"]
 
-resources:
-  - name: sql_warehouse
-    sql_warehouse:
-      id: "e81dde068949155d"
-      permission: "CAN_USE"
+env:
+  - name: DATABRICKS_WAREHOUSE_ID
+    value: "e81dde068949155d"

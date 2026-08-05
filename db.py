@@ -11,7 +11,7 @@ Auth resolves in this order:
      themselves without a browser prompt on every run.
 
 Connection target comes from environment variables (see .env.example for
-local dev; app.yaml's sql_warehouse resource injects these automatically
+local dev; app.yaml passes DATABRICKS_WAREHOUSE_ID directly as an env var
 when running as a Databricks App):
   DATABRICKS_SERVER_HOSTNAME / DATABRICKS_HOST  - workspace hostname
   DATABRICKS_HTTP_PATH / DATABRICKS_WAREHOUSE_ID - SQL warehouse target
