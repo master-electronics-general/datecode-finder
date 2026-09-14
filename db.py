@@ -1,13 +1,17 @@
 """Databricks SQL access for the Datecode Finder.
 
+Runs as the app's own service principal, not on-behalf-of the viewing user —
+everyone with "Can Use" on the app sees the same data, and only the service
+principal itself needs a Unity Catalog grant (one-time, covers every current
+and future user). See the me_prod schema grants required in the project docs.
+
 Auth resolves in this order:
-  1. Databricks Apps on-behalf-of-user token (X-Forwarded-Access-Token header)
-     — used automatically when deployed as a Databricks App with the "sql"
-     user_api_scope. Each viewer queries as themselves, no setup needed.
-  2. DATABRICKS_TOKEN env var — a fixed personal access token, for quick
+  1. DATABRICKS_TOKEN env var — a fixed personal access token, for quick
      local testing only.
-  3. The Databricks CLI's own cached OAuth login (run `databricks auth login`
-     once) — the default for local dev, so each developer authenticates as
+  2. Config() auto-detection — inside a deployed Databricks App this picks up
+     the app's own DATABRICKS_CLIENT_ID/DATABRICKS_CLIENT_SECRET automatically;
+     for local dev it falls back to the Databricks CLI's cached OAuth login
+     (run `databricks auth login` once), so each developer authenticates as
      themselves without a browser prompt on every run.
 
 Connection target comes from environment variables (see .env.example for
@@ -15,7 +19,7 @@ local dev; app.yaml passes DATABRICKS_WAREHOUSE_ID directly as an env var
 when running as a Databricks App):
   DATABRICKS_SERVER_HOSTNAME / DATABRICKS_HOST  - workspace hostname
   DATABRICKS_HTTP_PATH / DATABRICKS_WAREHOUSE_ID - SQL warehouse target
-  DATABRICKS_CONFIG_PROFILE                      - CLI profile (default: DEFAULT)
+  DATABRICKS_CONFIG_PROFILE                      - CLI profile (default: DEFAULT), local dev only
 """
 
 import os
@@ -41,36 +45,25 @@ def _http_path():
     return f"/sql/1.0/warehouses/{os.environ['DATABRICKS_WAREHOUSE_ID']}"
 
 
-def _user_token():
-    try:
-        return st.context.headers.get("X-Forwarded-Access-Token")
-    except Exception:
-        return None
-
-
 def _open_connection():
     server_hostname = _server_hostname()
     http_path = _http_path()
-
-    user_token = _user_token()
-    if user_token:
-        return sql.connect(server_hostname=server_hostname, http_path=http_path, access_token=user_token)
 
     token = os.environ.get("DATABRICKS_TOKEN")
     if token:
         return sql.connect(server_hostname=server_hostname, http_path=http_path, access_token=token)
 
-    cfg = Config(profile=os.environ.get("DATABRICKS_CONFIG_PROFILE", "DEFAULT"))
+    profile = os.environ.get("DATABRICKS_CONFIG_PROFILE")
+    cfg = Config(profile=profile) if profile else Config()
     return sql.connect(server_hostname=server_hostname, http_path=http_path, credentials_provider=lambda: cfg.authenticate)
 
 
 def get_connection():
     """One connection per browser session, reused across queries.
 
-    Each Streamlit session gets its own entry in st.session_state, so every
-    user authenticates once (as themselves, via OAuth) and nobody shares
-    another user's identity or login. Opening a fresh connection per query
-    would mean a fresh OAuth handshake per query, which races against itself.
+    Every session authenticates as the app's own service principal (see
+    module docstring), so this cache is purely to avoid a fresh OAuth
+    handshake on every single query.
     """
     if st.session_state.get("db_conn") is None:
         st.session_state["db_conn"] = _open_connection()
